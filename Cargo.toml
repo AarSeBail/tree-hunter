@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 indextree = "4.6.1"
 nalgebra = "0.32.5"
+rand = "0.8.5"
