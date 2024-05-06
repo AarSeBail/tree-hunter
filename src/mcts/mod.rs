@@ -2,16 +2,8 @@ use indextree::{Arena, NodeId};
 use rand::prelude::{SliceRandom, ThreadRng};
 use rand::Rng;
 use std::any::type_name;
-use std::cmp::max;
 use std::marker::PhantomData;
-
-pub trait Game: Clone {
-    fn get_actions(&self) -> Vec<u64>;
-    fn is_terminal(&self) -> bool;
-    fn act(&mut self, action: u64) -> bool;
-    fn get_score(&self) -> f64;
-    fn start(&self) -> Self;
-}
+use crate::game::{Game, GameArena};
 
 #[derive(Debug, Default)]
 pub struct MctsNode {
@@ -32,14 +24,13 @@ pub struct MctsArena<G: Game, H: Heuristic> {
     best_game: G,
     best_score: f64,
     game: G,
-    exploration: f64,
     rng: ThreadRng,
     heuristic: H,
     _p: PhantomData<G>,
 }
 
 impl<G: Game, H: Heuristic> MctsArena<G, H> {
-    pub fn new(game: G, mut heuristic: H) -> Self {
+    pub fn new(game: G, heuristic: H) -> Self {
         let mut arena = Arena::new();
         let root = arena.new_node(MctsNode::default());
         Self {
@@ -50,14 +41,9 @@ impl<G: Game, H: Heuristic> MctsArena<G, H> {
             best_score: f64::NEG_INFINITY,
             game,
             rng: rand::thread_rng(),
-            exploration: 1.414,
             heuristic,
             _p: PhantomData,
         }
-    }
-
-    pub fn best(&self) -> f64 {
-        self.arena.get(self.root).unwrap().get().best_rollout
     }
 
     fn select(&mut self) -> (NodeId, G) {
@@ -123,7 +109,7 @@ impl<G: Game, H: Heuristic> MctsArena<G, H> {
         return (selected, game);
     }
 
-    fn rollout(&mut self, selected: NodeId, game: &mut G) -> f64 {
+    fn rollout(&mut self, game: &mut G) -> f64 {
         while !game.is_terminal() {
             let action = *game.get_actions().choose(&mut rand::thread_rng()).unwrap();
             game.act(action);
@@ -179,33 +165,17 @@ impl<G: Game, H: Heuristic> MctsArena<G, H> {
         self.terminate_leaves(self.root)
     }
 
-    pub fn mcts_round(&mut self) {
-        let p = self.select();
-        let (parent, game) = self.expand(p);
-        let mut best = 0.0;
-        let mut sum = 0.0;
-        for i in 1..=self.num_rollouts {
-            let mut g = game.clone();
-            let val = self.rollout(parent, &mut g);
-            if val > best {
-                best = val;
-            }
-            if val > self.best_score {
-                self.best_game = g.clone();
-                self.best_score = val;
-            }
-            sum += val;
-        }
-        self.heuristic.update_heuristic(sum, best, self.num_rollouts);
-        self.backpropagate(parent, best, sum);
-    }
     pub fn tree_size(&self) -> usize {
         self.arena.count()
     }
+
+    #[allow(dead_code)]
     pub(crate) fn print(&self) {
         let p = self.root.debug_pretty_print(&self.arena);
         println!("{:?}", p);
     }
+
+    #[allow(dead_code)]
     pub(crate) fn select_route(&mut self) -> Vec<u64> {
         let mut v = vec![];
         let (n, g) = self.select();
@@ -218,12 +188,40 @@ impl<G: Game, H: Heuristic> MctsArena<G, H> {
         v.reverse();
         v
     }
-    pub(crate) fn best_graph(&self) -> G {
+
+    pub(crate) fn best_game(&self) -> G {
         self.best_game.clone()
     }
 }
 
-trait Heuristic {
+impl<G: Game, H: Heuristic> GameArena<G> for MctsArena<G, H> {
+    fn play_round(&mut self) {
+        let p = self.select();
+        let (parent, game) = self.expand(p);
+        let mut best = 0.0;
+        let mut sum = 0.0;
+        for _i in 1..=self.num_rollouts {
+            let mut g = game.clone();
+            let val = self.rollout(&mut g);
+            if val > best {
+                best = val;
+            }
+            if val > self.best_score {
+                self.best_game = g.clone();
+                self.best_score = val;
+            }
+            sum += val;
+        }
+        self.heuristic.update_heuristic(sum, best, self.num_rollouts);
+        self.backpropagate(parent, best, sum);
+    }
+
+    fn best(&self) -> f64 {
+        self.best_score
+    }
+}
+
+pub trait Heuristic {
     fn heuristic(&self, node: &MctsNode, parent: &MctsNode) -> f64;
     fn update_heuristic(&mut self, rollout_sum: f64, best: f64, new_rollouts: usize);
 }
@@ -242,7 +240,7 @@ impl UCT {
             exploration,
             num_rollouts: 0.0,
             mean_rollout: 0.0,
-            best_rollout: 0.0,
+            best_rollout: 1.0,
             upper_bound: 1.0,
         }
     }
@@ -255,13 +253,18 @@ impl UCT {
 impl Heuristic for UCT {
     fn heuristic(&self, node: &MctsNode, parent: &MctsNode) -> f64 {
         if node.num_simulations == 0.0 {
-            return 1.0;
+            // Also tried return 1.0
+            // Returning infinity is more sensible and seems to give better results
+            return f64::INFINITY;
+            // return 1.0;
         }
 
         /*node.total_accumulation / (self.upper_bound * node.num_simulations)
             + self.exploration * (parent.num_simulations.ln() / node.num_simulations).sqrt()*/
         node.best_rollout / self.upper_bound
             + self.exploration * (parent.num_simulations.ln() / node.num_simulations).sqrt()
+        /*node.best_rollout / self.best_rollout
+            + self.exploration * (parent.num_simulations.ln() / node.num_simulations).sqrt()*/
     }
 
     fn update_heuristic(&mut self, rollout_sum: f64, best: f64, new_rollouts: usize) {

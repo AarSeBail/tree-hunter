@@ -1,5 +1,5 @@
+use crate::game::Game;
 use crate::graph::Graph;
-use crate::mcts::Game;
 
 #[derive(Clone, Debug)]
 pub struct TreeGame<G: Graph> {

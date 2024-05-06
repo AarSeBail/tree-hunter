@@ -87,6 +87,9 @@ impl Graph for LapGraph {
         self.laplacian[(vertex, vertex)].round() as usize
     }
 
+    /*
+     * Returns the lowest index of a degree zero vertex, if one exists
+     */
     fn lowest_free_vertex(&self) -> Option<usize> {
         for (i, &d) in self.laplacian.diagonal().iter().enumerate() {
             if d == 0.0 {
